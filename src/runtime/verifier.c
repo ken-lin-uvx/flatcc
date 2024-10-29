@@ -11,6 +11,8 @@
 #include "flatcc/flatcc_verifier.h"
 #include "flatcc/flatcc_identifier.h"
 
+#include "sdkconfig.h"
+
 /* Customization for testing. */
 #if FLATCC_DEBUG_VERIFY
 #define FLATCC_VERIFIER_ASSERT_ON_ERROR 1
@@ -132,7 +134,11 @@ static inline int check_header(uoffset_t end, uoffset_t base, uoffset_t offset)
     }
 
     /* The `k > base` rather than `k >= base` is to avoid null offsets. */
-    return k > base && k + offset_size <= end && !(k & (offset_size - 1));
+    int res = k > base && k + offset_size <= end;
+#if CONFIG_FBS_VERIFY_ALIGNMENT
+    res &= !(k & (offset_size - 1));
+#endif
+    return res;
 }
 
 static inline int verify_struct(uoffset_t end, uoffset_t base, uoffset_t offset, uoffset_t size, uint16_t align)
@@ -144,7 +150,9 @@ static inline int verify_struct(uoffset_t end, uoffset_t base, uoffset_t offset,
     base += offset;
     verify(base + size >= base, flatcc_verify_error_struct_size_overflow);
     verify(base + size <= end, flatcc_verify_error_struct_out_of_range);
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify (!(base & (align - 1u)), flatcc_verify_error_struct_unaligned);
+#endif
     return flatcc_verify_ok;
 }
 
@@ -206,7 +214,9 @@ static int verify_field(flatcc_table_verifier_descriptor_t *td,
     trace_verify("entry: buf + table + vte", k);
     trace_verify("align", align);
     trace_verify("align masked entry", k & (align - 1u));
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify(!(k & (align - 1u)), flatcc_verify_error_table_field_not_aligned);
+#endif
     /* We assume the table size has already been verified. */
     return flatcc_verify_ok;
 }
@@ -237,7 +247,9 @@ static int get_offset_field(flatcc_table_verifier_descriptor_t *td, voffset_t id
     /* This normally optimizes to nop. */
     verify(uoffset_size > voffset_size || k <= k2, flatcc_verify_error_table_field_size_overflow);
     k += td->table;
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify(!(k & (offset_size - 1u)), flatcc_verify_error_table_field_not_aligned);
+#endif
     /* We assume the table size has already been verified. */
     *out = k;
     return flatcc_verify_ok;
@@ -274,7 +286,9 @@ static inline int verify_vector(const void *buf, uoffset_t end, uoffset_t base, 
     /* This is due to incorrect buffers from other builders than cannot easily be ignored. */
     align = n == 0 ? uoffset_size : align;
 #endif
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify(!(base & ((align - 1u) | (uoffset_size - 1u))), flatcc_verify_error_vector_header_out_of_range_or_unaligned);
+#endif
     /* `n * elem_size` can overflow uncontrollably otherwise. */
     verify(n <= max_count, flatcc_verify_error_vector_count_exceeds_representable_vector_size);
     verify(end - base >= n * elem_size, flatcc_verify_error_vector_out_of_range);
@@ -306,12 +320,18 @@ static inline int verify_table(const void *buf, uoffset_t end, uoffset_t base, u
     td.table = base + offset;
     /* Read vtable offset - it is signed, but we want it unsigned, assuming 2's complement works. */
     vbase = td.table - read_uoffset(buf, td.table);
-    verify((soffset_t)vbase >= 0 && !(vbase & (voffset_size - 1)), flatcc_verify_error_vtable_offset_out_of_range_or_unaligned);
+    verify((soffset_t)vbase >= 0, flatcc_verify_error_vtable_offset_out_of_range_or_unaligned);
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
+    verify(!(vbase & (voffset_size - 1)), flatcc_verify_error_vtable_offset_out_of_range_or_unaligned);
+#endif
     verify(vbase + voffset_size <= end, flatcc_verify_error_vtable_header_out_of_range);
     /* Read vtable size. */
     td.vsize = read_voffset(buf, vbase);
     vend = vbase + td.vsize;
-    verify(vend <= end && !(td.vsize & (voffset_size - 1)), flatcc_verify_error_vtable_size_out_of_range_or_unaligned);
+    verify(vend <= end, flatcc_verify_error_vtable_size_out_of_range_or_unaligned);
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
+    verify(!(td.vsize & (voffset_size - 1)), flatcc_verify_error_vtable_size_out_of_range_or_unaligned);
+#endif
     /* Optimizes away overflow check if uoffset_t is large enough. */
     verify(uoffset_size > voffset_size || vend >= vbase, flatcc_verify_error_vtable_size_overflow);
 
@@ -445,7 +465,9 @@ int flatcc_verify_buffer_header(const void *buf, size_t bufsiz, const char *fid)
 {
     thash_t id, id2;
 
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify_runtime(!(((size_t)buf) & (offset_size - 1)), flatcc_verify_error_runtime_buffer_header_not_aligned);
+#endif
     /* -8 ensures no scalar or offset field size can overflow. */
     verify_runtime(bufsiz <= FLATBUFFERS_UOFFSET_MAX - 8, flatcc_verify_error_runtime_buffer_size_too_large);
     /*
@@ -468,7 +490,9 @@ int flatcc_verify_buffer_header_with_size(const void *buf, size_t *bufsiz, const
     thash_t id, id2;
     size_t size_field;
 
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify_runtime(!(((size_t)buf) & (offset_size - 1)), flatcc_verify_error_runtime_buffer_header_not_aligned);
+#endif
     /* -8 ensures no scalar or offset field size can overflow. */
     verify_runtime(*bufsiz <= FLATBUFFERS_UOFFSET_MAX - 8, flatcc_verify_error_runtime_buffer_size_too_large);
 
@@ -490,7 +514,9 @@ int flatcc_verify_typed_buffer_header(const void *buf, size_t bufsiz, flatbuffer
 {
     thash_t id, id2;
 
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify_runtime(!(((size_t)buf) & (offset_size - 1)), flatcc_verify_error_runtime_buffer_header_not_aligned);
+#endif
     /* -8 ensures no scalar or offset field size can overflow. */
     verify_runtime(bufsiz <= FLATBUFFERS_UOFFSET_MAX - 8, flatcc_verify_error_runtime_buffer_size_too_large);
     /*
@@ -513,7 +539,9 @@ int flatcc_verify_typed_buffer_header_with_size(const void *buf, size_t *bufsiz,
     thash_t id, id2;
     size_t size_field;
 
+#ifdef CONFIG_FBS_VERIFY_ALIGNMENT
     verify_runtime(!(((size_t)buf) & (offset_size - 1)), flatcc_verify_error_runtime_buffer_header_not_aligned);
+#endif
     /* -8 ensures no scalar or offset field size can overflow. */
     verify_runtime(*bufsiz <= FLATBUFFERS_UOFFSET_MAX - 8, flatcc_verify_error_runtime_buffer_size_too_large);
 
